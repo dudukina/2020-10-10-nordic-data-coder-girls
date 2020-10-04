@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="" xml:lang="">
+  <head>
+    <title>R and tidyverse for publicly available Nordic data on medication utilization</title>
+    <meta charset="utf-8" />
+    <meta name="author" content="Elena Dudukina" />
+    <meta name="date" content="2020-10-04" />
+    <script src="libs/header-attrs/header-attrs.js"></script>
+    <link rel="stylesheet" href="xaringan-themer.css" type="text/css" />
+  </head>
+  <body>
+    <textarea id="source">
+class: center, middle, inverse, title-slide
+
+# R and tidyverse for publicly available Nordic data on medication utilization
+### Elena Dudukina
+### 2020-10-04
+
+---
+
+
+
+
+
+
+
+
+
+# National Registries
+- Denmark and other Nordic countries have built a system based on societal trust and enabled state-covered universal healthcare
+- Large administrative registries with data on hospital visits and prescription drug utilization
+- Amazing possibilities for a high quality registry-based research
+- Many registries can be accessible to a public via aggregated datasets
+      - The National Prescription Registry (since 1995)
+      - Drug utilization trends and between countries comparisons
+---
+# Loading libraries and finding autumn palette
+
+```r
+library(tidyverse)
+library(magrittr)
+library(colorfindr)
+library(ggrepel)
+
+autumn_colors &lt;- get_colors("https://images2.minutemediacdn.com/image/upload/c_crop,h_1349,w_2400,x_0,y_125/f_auto,q_auto,w_1100/v1569260079/shape/mentalfloss/gettyimages-1053614486_1.jpg") %&gt;% 
+  make_palette(n = 15)
+```
+
+&lt;img src="2020-10-10-nordic-data_files/figure-html/unnamed-chunk-3-1.png" width="576" /&gt;
+---
+Prepare to load data on ![:scale 3%](pill.png)
+
+```r
+link_list_dk &lt;- list(
+  "1996_atc_code_data.txt" = "https://medstat.dk/da/download/file/MTk5Nl9hdGNfY29kZV9kYXRhLnR4dA==",
+  "1997_atc_code_data.txt"  = "https://medstat.dk/da/download/file/MTk5N19hdGNfY29kZV9kYXRhLnR4dA==",
+  "1998_atc_code_data.txt" = "https://medstat.dk/da/download/file/MTk5OF9hdGNfY29kZV9kYXRhLnR4dA==",
+  "atc_code_text.txt" = "https://medstat.dk/da/download/file/YXRjX2NvZGVfdGV4dC50eHQ=",
+  "atc_groups.txt" = "https://medstat.dk/da/download/file/YXRjX2dyb3Vwcy50eHQ=",
+  "population_data.txt" = "https://medstat.dk/da/download/file/cG9wdWxhdGlvbl9kYXRhLnR4dA=="
+)
+```
+
+## The actual number of files is 23, from 1996 until 2019 and 3 additional files with meta-data, e.g., variables' labels
+
+
+---
+# Data on population sizes of each age group and sex
+
+```r
+# age structure data
+# parse with column type character
+age_structure &lt;- read_delim(link_list_dk[["population_data.txt"]], delim = ";", col_names = c(paste0("V", c(1:7))), col_types = cols(V1 = col_character(), V2 = col_character(), V3 = col_character(), V4 = col_character(), V5 = col_character(), V6 = col_character(), V7 = col_character())) %&gt;%
+  # rename and keep columns
+  select(year = V1,
+         region_text = V2,
+         region = V3,
+         gender = V4,
+         age = V5,
+         denominator_per_year = V6) %&gt;% 
+  # human-reading friendly label on sex categories
+  mutate(
+      gender_text = case_when(
+      gender == "0" ~ "both sexes",
+      gender == "1" ~ "men",
+      gender == "2" ~ "women",
+      T ~ as.character(gender)
+    )
+  ) %&gt;% 
+  # make numeric variables
+  mutate_at(vars(year, age, denominator_per_year), as.numeric) %&gt;% 
+  # keep only data for the age categories I will work with, only on women, and for the whole Denmark
+  filter(age %in% 15:84, gender == "2", region == "0") %&gt;% 
+  arrange(year, age, region, gender)
+```
+---
+# Data structure
+
+```r
+age_structure %&gt;% slice(1:10)
+```
+
+```
+## # A tibble: 10 x 7
+##     year region_text region gender   age denominator_per_year gender_text
+##    &lt;dbl&gt; &lt;chr&gt;       &lt;chr&gt;  &lt;chr&gt;  &lt;dbl&gt;                &lt;dbl&gt; &lt;chr&gt;      
+##  1  1996 DK          0      2         15                29092 women      
+##  2  1996 DK          0      2         16                29961 women      
+##  3  1996 DK          0      2         17                31344 women      
+##  4  1996 DK          0      2         18                31419 women      
+##  5  1996 DK          0      2         19                32494 women      
+##  6  1996 DK          0      2         20                36363 women      
+##  7  1996 DK          0      2         21                36366 women      
+##  8  1996 DK          0      2         22                36498 women      
+##  9  1996 DK          0      2         23                38452 women      
+## 10  1996 DK          0      2         24                37873 women
+```
+---
+# Prepare labels for the drugs in English
+
+```r
+eng_drug &lt;- read_delim(link_list_dk[["atc_groups.txt"]], delim = ";", col_names = c(paste0("V", c(1:6))), col_types = cols(V1 = col_character(), V2 = col_character(), V3 = col_character(), V4 = col_character(), V5 = col_character(), V6 = col_character())) %&gt;% 
+  # keep drug classes labels in English
+  filter(V5 == "1") %&gt;% 
+  select(ATC = V1,
+         drug = V2,
+         unit_dk = V4)
+```
+---
+# Check drugs' labels
+
+
+```r
+eng_drug %&gt;% slice(1:10)
+```
+
+```
+## # A tibble: 10 x 3
+##    ATC     drug                                    unit_dk                  
+##    &lt;chr&gt;   &lt;chr&gt;                                   &lt;chr&gt;                    
+##  1 A       Alimentary tract and metabolism         No common unit for volume
+##  2 A01     Stomatological preparations             No common unit for volume
+##  3 A01A    Stomatological preparations             No common unit for volume
+##  4 A01AA   Caries prophylactic agents              Packages                 
+##  5 A01AA01 Sodium fluoride                         Packages                 
+##  6 A01AB   Antiinfectives for local oral treatment No common unit for volume
+##  7 A01AB02 Hydrogenperoxide                        &lt;NA&gt;                     
+##  8 A01AB03 Chlorhexidine                           DDD                      
+##  9 A01AB04 Amphotericin                            DDD                      
+## 10 A01AB09 Miconazole                              DDD
+```
+---
+# Drugs of interest
+Medications used in Denmark for either migraine episode relief or migraine prophylaxis:
+
+I use regular expresions (regex) to capture the drugs codes of interest
+`$` at the end of the regular expression tells to my search strategy what is the last character of the string
+
+**Example:**
+
+```r
+codes &lt;- c("N02CC", "N02C", "N02CC01", "N02CC01", "N02CC02", "N02CC")
+only_want_N02C_regex &lt;- "N02C$"
+only_want_N02CC_regex &lt;- "N02CC$"
+want_any_N02C_regex &lt;- "N02CC"
+
+str_extract(string = codes, pattern = only_want_N02C_regex)
+```
+
+```
+## [1] NA     "N02C" NA     NA     NA     NA
+```
+
+```r
+str_extract(string = codes, pattern = only_want_N02CC_regex)
+```
+
+```
+## [1] "N02CC" NA      NA      NA      NA      "N02CC"
+```
+
+```r
+str_extract(string = codes, pattern = want_any_N02C_regex)
+```
+
+```
+## [1] "N02CC" NA      "N02CC" "N02CC" "N02CC" "N02CC"
+```
+
+---
+# Specify all the drug codes I need
+
+
+```r
+regex_triptans &lt;- "N02CC$"
+regex_ergots &lt;- "N02CA$"
+regex_nsaid &lt;- "M01A$"
+regex_naproxen &lt;- "M01AE02$"
+regex_erenumab &lt;- "N02CX07$|N02CD01$"
+regex_galcanezumab &lt;- "N02CX08$|N02CD02$"
+regex_fremanezumab &lt;- "N02CD03$"
+regex_paracet &lt;- "N02BE01$"
+regex_salyc_acid_caff &lt;- "N02BA51$"
+regex_metoclopramide &lt;- "A03FA01$"
+regex_domperidone &lt;- "A03FA03$"
+regex_metoprolol &lt;- "C07AB02$"
+regex_propanolol &lt;- "C07AA05$"
+regex_tolfenamic &lt;- "M01AG02$"
+regex_topiramate &lt;- "N03AX11$"
+regex_valproate &lt;- "N03AG01$"
+regex_flunarizine &lt;- "N07CA03$"
+regex_amitriptyline &lt;- "N06AA09$"
+regex_gabapentin &lt;- "N03AX12$"
+regex_pizotifen &lt;- "N02CX01$"
+regex_lisinopril &lt;- "C09AA03$"
+regex_candesartan &lt;- "C09CA06$"
+regex_riboflavin &lt;- "A11HA04$"
+regex_botulinum &lt;- "M03AX01$"
+```
+
+
+---
+# Load main data
+
+```r
+# ATC data
+atc_data &lt;- map(atc_code_data_list, ~read_delim(file = .x, delim = ";", trim_ws = T, col_names = c(paste0("V", c(1:14))), col_types = cols(V1 = col_character(), V2 = col_character(), V3 = col_character(), V4 = col_character(), V5 = col_character(),V6 = col_character(), V7 = col_character(), V8 = col_character(), V9 = col_character(), V10 = col_character(), V11 = col_character(), V12 = col_character(), V13 = col_character(), V14 = col_character()))) %&gt;% 
+  # bind data from all years
+  bind_rows()
+```
+---
+# Typical data structure
+## of a medication utilization file from the source
+
+
+```r
+atc_data %&gt;% slice(1:10)
+```
+
+```
+## # A tibble: 10 x 14
+##    V1    V2    V3    V4    V5    V6    V7    V8    V9    V10   V11   V12   V13  
+##    &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt; &lt;chr&gt;
+##  1 A     1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  9854… 4943… &lt;NA&gt;  &lt;NA&gt;  &lt;NA&gt; 
+##  2 A01   1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  19180 2776  &lt;NA&gt;  &lt;NA&gt;  &lt;NA&gt; 
+##  3 A01A  1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  19180 2776  &lt;NA&gt;  &lt;NA&gt;  &lt;NA&gt; 
+##  4 A01AA 1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  1604  0     11    0     &lt;NA&gt; 
+##  5 A01A… 1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  1604  0     11    0     &lt;NA&gt; 
+##  6 A01AB 1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  12782 2253  &lt;NA&gt;  &lt;NA&gt;  &lt;NA&gt; 
+##  7 A01A… 1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  3157  0     36404 19    &lt;NA&gt; 
+##  8 A01A… 1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  1689  1     1271  0.7   &lt;NA&gt; 
+##  9 A01A… 1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  1334  653   121   0.1   &lt;NA&gt; 
+## 10 A01A… 1996  0     0     A     A     &lt;NA&gt;  &lt;NA&gt;  3547  1599  141   0.1   &lt;NA&gt; 
+## # … with 1 more variable: V14 &lt;chr&gt;
+```
+---
+# Human-friendly column names
+## optional, but, hey, easier to follow
+
+```r
+atc_data %&lt;&gt;% 
+  # rename and keep columns
+  rename(
+    ATC = V1,
+    year = V2,
+    sector = V3,
+    region = V4,
+    gender = V5,
+    age = V6,
+    number_of_people = V7,
+    patients_per_1000_inhabitants = V8,
+    turnover = V9,
+    regional_grant_paid = V10,
+    quantity_sold_1000_units = V11,
+    quantity_sold_units_per_unit_1000_inhabitants_per_day = V12,
+    percentage_of_sales_in_the_primary_sector = V13
+  )
+```
+---
+# Sneak peek
+
+```r
+atc_data %&gt;% slice(1:10)
+```
+
+```
+## # A tibble: 10 x 14
+##    ATC   year  sector region gender age   number_of_people patients_per_10…
+##    &lt;chr&gt; &lt;chr&gt; &lt;chr&gt;  &lt;chr&gt;  &lt;chr&gt;  &lt;chr&gt; &lt;chr&gt;            &lt;chr&gt;           
+##  1 A     1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+##  2 A01   1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+##  3 A01A  1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+##  4 A01AA 1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+##  5 A01A… 1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+##  6 A01AB 1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+##  7 A01A… 1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+##  8 A01A… 1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+##  9 A01A… 1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+## 10 A01A… 1996  0      0      A      A     &lt;NA&gt;             &lt;NA&gt;            
+## # … with 6 more variables: turnover &lt;chr&gt;, regional_grant_paid &lt;chr&gt;,
+## #   quantity_sold_1000_units &lt;chr&gt;,
+## #   quantity_sold_units_per_unit_1000_inhabitants_per_day &lt;chr&gt;,
+## #   percentage_of_sales_in_the_primary_sector &lt;chr&gt;, V14 &lt;chr&gt;
+```
+---
+# Wrangle data 
+
+```r
+atc_data %&lt;&gt;% 
+  # clean columns names and set-up labels
+  mutate(
+    year = as.numeric(year),
+    region_text = case_when(
+      region == "0" ~ "DK",
+      region == "1" ~ "Region Hovedstaden",
+      region == "2" ~ "Region Midtjylland",
+      region == "3" ~ "Region Nordjylland",
+      region == "4" ~ "Region Sjælland",
+      region == "5" ~ "Region Syddanmark",
+      T ~ NA_character_
+    ),
+    gender_text = case_when(
+      gender == "0" ~ "both sexes",
+      gender == "1" ~ "men",
+      gender == "2" ~ "women",
+      T ~ as.character(gender)
+    )
+  ) %&gt;% 
+  # reformat all variables, which should be numeric as numeric (not character)
+  mutate_at(vars(turnover, regional_grant_paid, quantity_sold_1000_units, quantity_sold_units_per_unit_1000_inhabitants_per_day, number_of_people, patients_per_1000_inhabitants), as.numeric)
+```
+---
+# Sneak peek
+
+```r
+atc_data %&gt;% slice(1:10)
+```
+
+```
+## # A tibble: 10 x 16
+##    ATC    year sector region gender age   number_of_people patients_per_10…
+##    &lt;chr&gt; &lt;dbl&gt; &lt;chr&gt;  &lt;chr&gt;  &lt;chr&gt;  &lt;chr&gt;            &lt;dbl&gt;            &lt;dbl&gt;
+##  1 A      1996 0      0      A      A                   NA               NA
+##  2 A01    1996 0      0      A      A                   NA               NA
+##  3 A01A   1996 0      0      A      A                   NA               NA
+##  4 A01AA  1996 0      0      A      A                   NA               NA
+##  5 A01A…  1996 0      0      A      A                   NA               NA
+##  6 A01AB  1996 0      0      A      A                   NA               NA
+##  7 A01A…  1996 0      0      A      A                   NA               NA
+##  8 A01A…  1996 0      0      A      A                   NA               NA
+##  9 A01A…  1996 0      0      A      A                   NA               NA
+## 10 A01A…  1996 0      0      A      A                   NA               NA
+## # … with 8 more variables: turnover &lt;dbl&gt;, regional_grant_paid &lt;dbl&gt;,
+## #   quantity_sold_1000_units &lt;dbl&gt;,
+## #   quantity_sold_units_per_unit_1000_inhabitants_per_day &lt;dbl&gt;,
+## #   percentage_of_sales_in_the_primary_sector &lt;chr&gt;, V14 &lt;chr&gt;,
+## #   region_text &lt;chr&gt;, gender_text &lt;chr&gt;
+```
+---
+# Keep only the needed data
+
+```r
+atc_data %&lt;&gt;% 
+  select(-V14) %&gt;%
+  filter(
+  # only women
+  gender == "2",
+  # country level data
+  region == "0",
+  # prescription medicine only
+  sector =="0"
+) %&gt;% 
+  # only drugs of interest
+  filter(str_detect(ATC, all_migraine_drugs)) %&gt;% 
+  # deal with non-numeric age and re-code as numeric
+  mutate(
+    age = parse_integer(age)
+  )
+```
+---
+# Keep only the needed data
+
+
+```r
+atc_data %&lt;&gt;% 
+  # ages 15 to 80 years
+  filter(age %in% 15:84) %&gt;% 
+  # make categories
+  mutate(
+    age_cat = case_when(
+      age %in% 15:24 ~ "15-24",
+      age %in% 25:34 ~ "25-34",
+      age %in% 35:44 ~ "35-44",
+      age %in% 45:54 ~ "45-54",
+      age %in% 55:64 ~ "55-64",
+      age %in% 65:74 ~ "65-74",
+      age %in% 75:84 ~ "75-84",
+      T ~ NA_character_
+    )
+)
+```
+---
+# Sneak peek
+
+
+```r
+atc_data %&gt;% slice(1:10)
+```
+
+```
+## # A tibble: 10 x 16
+##    ATC    year sector region gender   age number_of_people patients_per_10…
+##    &lt;chr&gt; &lt;dbl&gt; &lt;chr&gt;  &lt;chr&gt;  &lt;chr&gt;  &lt;int&gt;            &lt;dbl&gt;            &lt;dbl&gt;
+##  1 A03F…  1999 0      0      2         15              144             5.47
+##  2 A03F…  1999 0      0      2         16              222             8.19
+##  3 A03F…  1999 0      0      2         17              298            10.8 
+##  4 A03F…  1999 0      0      2         18              387            13.1 
+##  5 A03F…  1999 0      0      2         19              457            15.1 
+##  6 A03F…  1999 0      0      2         20              530            16.7 
+##  7 A03F…  1999 0      0      2         21              599            18.6 
+##  8 A03F…  1999 0      0      2         22              649            19.2 
+##  9 A03F…  1999 0      0      2         23              706            18.8 
+## 10 A03F…  1999 0      0      2         24              749            20.2 
+## # … with 8 more variables: turnover &lt;dbl&gt;, regional_grant_paid &lt;dbl&gt;,
+## #   quantity_sold_1000_units &lt;dbl&gt;,
+## #   quantity_sold_units_per_unit_1000_inhabitants_per_day &lt;dbl&gt;,
+## #   percentage_of_sales_in_the_primary_sector &lt;chr&gt;, region_text &lt;chr&gt;,
+## #   gender_text &lt;chr&gt;, age_cat &lt;chr&gt;
+```
+---
+# Add meta-data
+
+
+
+```r
+atc_data %&lt;&gt;% 
+  # get age groups labels and other meta-data
+  left_join(age_structure) %&gt;% 
+  # get drugs' labels
+  left_join(eng_drug)
+```
+
+```
+## Joining, by = c("year", "region", "gender", "age", "region_text", "gender_text")
+```
+
+```
+## Joining, by = "ATC"
+```
+---
+# Sneak peek
+
+```r
+atc_data %&gt;% select(15:19) %&gt;% slice(1:10)
+```
+
+```
+## # A tibble: 10 x 5
+##    gender_text age_cat denominator_per_year drug           unit_dk
+##    &lt;chr&gt;       &lt;chr&gt;                  &lt;dbl&gt; &lt;chr&gt;          &lt;chr&gt;  
+##  1 women       15-24                  26331 Metoclopramide DDD    
+##  2 women       15-24                  27104 Metoclopramide DDD    
+##  3 women       15-24                  27553 Metoclopramide DDD    
+##  4 women       15-24                  29604 Metoclopramide DDD    
+##  5 women       15-24                  30257 Metoclopramide DDD    
+##  6 women       15-24                  31735 Metoclopramide DDD    
+##  7 women       15-24                  32162 Metoclopramide DDD    
+##  8 women       15-24                  33897 Metoclopramide DDD    
+##  9 women       15-24                  37589 Metoclopramide DDD    
+## 10 women       15-24                  37158 Metoclopramide DDD
+```
+---
+# Compute numerators and denomibators
+## for the age groups of interest
+
+
+```r
+atc_data %&lt;&gt;% 
+  group_by(ATC, year, age_cat) %&gt;% 
+  mutate(
+    numerator = sum(number_of_people),
+    denominator = sum(denominator_per_year),
+    patients_per_1000_inhabitants = numerator / denominator * 1000
+  ) %&gt;% 
+  filter(row_number() == 1) %&gt;% 
+  ungroup() %&gt;% 
+  select(year, ATC, drug, unit_dk, gender, age_cat, patients_per_1000_inhabitants) %&gt;% 
+  mutate(
+    country = "Denmark"
+  )
+```
+---
+# Sneak peek
+
+
+```r
+atc_data %&gt;% 
+  slice(1:10) %&gt;% 
+  kableExtra::kable(format = "html")
+```
+
+&lt;table&gt;
+ &lt;thead&gt;
+  &lt;tr&gt;
+   &lt;th style="text-align:right;"&gt; year &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; ATC &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; drug &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; unit_dk &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; gender &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; age_cat &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; patients_per_1000_inhabitants &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; country &lt;/th&gt;
+  &lt;/tr&gt;
+ &lt;/thead&gt;
+&lt;tbody&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 15-24 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 15.1281151 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 20.4391764 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 35-44 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 18.6600845 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 45-54 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 21.8477132 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 55-64 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 26.4338008 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 65-74 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 33.3200827 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 75-84 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 42.6086854 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 15-24 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.4148186 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.4482942 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:right;"&gt; 1999 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; DDD &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 2 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 35-44 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.5565008 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+---
+# Check if all medication's utilization was available
+
+
+```r
+atc_data %&gt;% distinct(ATC, drug) %&gt;% 
+  filter(is.na(drug))
+```
+
+```
+## # A tibble: 1 x 2
+##   ATC     drug 
+##   &lt;chr&gt;   &lt;chr&gt;
+## 1 N02CD01 &lt;NA&gt;
+```
+
+```r
+# fix missing label for N02CD01
+atc_data %&lt;&gt;% mutate(
+  drug = case_when(
+    ATC == "N02CD01" ~ "erenumab",
+    T ~ drug
+  )
+)
+```
+---
+# Check
+
+
+```r
+atc_data %&gt;% 
+  select(ATC, drug) %&gt;% 
+  slice(1:10) %&gt;% 
+  kableExtra::kable(format = "html")
+```
+
+&lt;table&gt;
+ &lt;thead&gt;
+  &lt;tr&gt;
+   &lt;th style="text-align:left;"&gt; ATC &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; drug &lt;/th&gt;
+  &lt;/tr&gt;
+ &lt;/thead&gt;
+&lt;tbody&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+---
+# Make a plotting function for all drugs odf interest
+
+
+```r
+plot_utilization &lt;- function(data, drug_regex, title, max_year){
+  data %&gt;% 
+  mutate(label = if_else(year == max_year, as.character(age_cat), NA_character_),
+         value = case_when(
+             age_cat == "25-34" ~ "#EA7F15",
+             age_cat == "35-44" ~ "#962A06",
+             T ~ "gray"
+         )) %&gt;%
+  filter(str_detect(ATC, {{ drug_regex }})) %&gt;% 
+  ggplot(aes(x = year, y = patients_per_1000_inhabitants, group = age_cat, color = value)) +
+  geom_line() +
+  facet_grid(rows = vars(drug, ATC), scales = "free", drop = F) +
+  theme_light(base_size = 14) +
+  scale_x_continuous(breaks = c(seq(1995, 2019, 2))) +
+  scale_color_identity() +
+  theme(plot.caption = element_text(hjust = 0),
+        legend.position = "none",
+        panel.spacing = unit(0.8, "cm")) +
+  labs(y = "Female patients\nper 1,000 women in the population", title = paste0(title, " utilization in Danish women"), subtitle = "aged between 15 and 84 years") +
+    ggrepel::geom_label_repel(aes(label = label), na.rm = TRUE, nudge_x = 3, hjust = 0.5, direction = "y", segment.size = 0.1, segment.colour = "black", show.legend = F)
+}
+```
+---
+# Specify plotting arguments
+
+
+```r
+list_regex_dk &lt;- list(regex_triptans, regex_ergots, regex_nsaid, regex_naproxen, regex_erenumab, regex_paracet, regex_salyc_acid_caff, regex_metoclopramide, regex_domperidone, regex_metoprolol, regex_propanolol, regex_tolfenamic, regex_topiramate, regex_valproate, regex_flunarizine, regex_amitriptyline, regex_gabapentin, regex_pizotifen, regex_lisinopril, regex_candesartan, regex_botulinum)
+
+list_title_dk &lt;- list("triptans", "ergots", "NSAIDs", "naproxen", "erenumab", "paracetamol", "salycilic acid and caffeine", "metoclopramide", "domperidone", "metoprolol", "propanolol", "tolfenamic", "topiramate", "valproate", "flunarizine", "amitriptyline", "gabapentin", "pizotifen", "lisinopril", "candesartan", "botulinum") %&gt;% 
+  map_if(. != "NSAIDs", ~ str_to_sentence(.))
+```
+---
+# Iterate along the argumets' lists
+
+
+```r
+list_plots_dk &lt;- pmap(list(list_regex_dk, list_title_dk), ~plot_utilization(data = atc_data, drug_regex = ..1, title = ..2, max_year = 2019)) %&gt;% 
+  setNames(., c("triptans", "ergots", "NSAIDs", "naproxen", "erenumab", "paracetamol", "salycilic acid and caffeine", "metoclopramide", "domperidone", "metoprolol", "propanolol", "tolfenamic", "topiramate", "valproate", "flunarizine", "amitriptyline", "gabapentin", "pizotifen", "lisinopril", "candesartan", "botulinum"))
+```
+---
+
+```r
+results_dk &lt;- atc_data %&gt;% 
+  filter((age_cat == "25-34" | age_cat == "35-44"), year == "2019") %&gt;% 
+  select(ATC, drug, age_cat, patients_per_1000_inhabitants, country)
+
+results_dk %&gt;% 
+  slice(1:5) %&gt;% 
+  kableExtra::kable(format = "html")
+```
+
+&lt;table&gt;
+ &lt;thead&gt;
+  &lt;tr&gt;
+   &lt;th style="text-align:left;"&gt; ATC &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; drug &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; age_cat &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; patients_per_1000_inhabitants &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; country &lt;/th&gt;
+  &lt;/tr&gt;
+ &lt;/thead&gt;
+&lt;tbody&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 9.967407 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 35-44 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 7.405591 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 1.640624 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 35-44 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 1.748027 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; C07AA05 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Propranolol &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 4.495914 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Denmark &lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+---
+# Plots sneak peek
+
+```r
+list_plots_dk$triptans
+```
+
+&lt;img src="2020-10-10-nordic-data_files/figure-html/unnamed-chunk-32-1.png" width="576" /&gt;
+---
+# Swedish data
+I have Swedish data locally saved, the source can be found [here](https://sdb.socialstyrelsen.se/export/csv/statistikdatabasen-lakemedel.zip)
+
+## Keep only the drugs used in migraine, population of women between 18 and 84 on the national level
+
+
+
+```r
+data_se %&lt;&gt;% 
+  filter(gender == "Kvinnor", region == "Riket") %&gt;% 
+  filter(str_detect(string = ATC, pattern = all_migraine_drugs))
+```
+---
+# Swedish data is grouped by age categories
+
+```r
+data_se %&gt;% 
+  distinct(age_group)
+```
+
+```
+## # A tibble: 19 x 1
+##    age_group
+##    &lt;chr&gt;    
+##  1 0-4      
+##  2 5-9      
+##  3 10-14    
+##  4 15-19    
+##  5 20-24    
+##  6 25-29    
+##  7 30-34    
+##  8 35-39    
+##  9 40-44    
+## 10 45-49    
+## 11 50-54    
+## 12 55-59    
+## 13 60-64    
+## 14 65-69    
+## 15 70-74    
+## 16 75-79    
+## 17 80-84    
+## 18 85+      
+## 19 Totalt
+```
+---
+# Categorize age groups according to Danish data
+
+```r
+data_se %&lt;&gt;% filter(! age_group %in% c("0-4", "5-9", "10-14", "85+", "Totalt")) %&gt;% 
+  # re-group ages as is Danish data
+  mutate(
+    age_cat = case_when(
+      age_group == "15-19" | age_group == "20-24" ~ "15-24",
+      age_group == "25-29" | age_group == "30-34" ~ "25-34",
+      age_group == "35-39" | age_group == "40-44" ~ "35-44",
+      age_group == "45-49" | age_group == "50-54" ~ "45-54",
+      age_group == "55-59" | age_group == "60-64" ~ "55-64",
+      age_group == "65-69" | age_group == "70-74" ~ "65-74",
+      age_group == "75-79" | age_group == "80-84" ~ "75-84",
+      T ~ "other"
+    )
+  )
+```
+---
+# Compute denominatirs for medication utilization rate
+
+
+```r
+data_se %&lt;&gt;% group_by(ATC, year, age_cat) %&gt;% 
+  mutate(
+    numerator = sum(`Antal patienter`),
+    denominator = sum(Befolkning),
+    patients_per_1000_inhabitants = numerator / denominator * 1000
+  ) %&gt;% 
+  filter(row_number() == 1) %&gt;% 
+  ungroup() %&gt;% 
+  select(year, ATC, gender, age_cat, patients_per_1000_inhabitants) %&gt;% 
+  mutate(
+    country = "Sweden"
+  )
+```
+---
+# Add English labels to the ATC codes in Swedish data
+
+```r
+data_se %&lt;&gt;% 
+  left_join(eng_drug)
+```
+
+```
+## Joining, by = "ATC"
+```
+---
+# Check if all medication utilization was available
+
+```r
+data_se %&gt;% 
+  distinct(ATC, drug) %&gt;% 
+  filter(is.na(drug))
+```
+
+```
+## # A tibble: 3 x 2
+##   ATC     drug 
+##   &lt;chr&gt;   &lt;chr&gt;
+## 1 N02CD01 &lt;NA&gt; 
+## 2 N02CD03 &lt;NA&gt; 
+## 3 N02CX07 &lt;NA&gt;
+```
+
+```r
+# fix missing label for N02CD01
+data_se %&lt;&gt;% mutate(
+  drug = case_when(
+    ATC == "N02CD01" ~ "Erenumab",
+    ATC == "N02CD03" ~ "Galcanezumab",
+    ATC == "N02CX07" ~ "Erenumab",
+    T ~ drug
+  )
+)
+```
+---
+# Make a plotting function for Swedish data
+
+```r
+plot_utilization_se &lt;- function(data, drug_regex, title, max_year){
+  data %&gt;% 
+  filter(! is.na(patients_per_1000_inhabitants)) %&gt;% 
+  mutate(label = if_else(year == max_year, as.character(age_cat), NA_character_),
+         value = case_when(
+             age_cat == "25-34" ~ "#EA7F15",
+             age_cat == "35-44" ~ "#962A06",
+             T ~ "gray"
+         )) %&gt;%
+  filter(str_detect(ATC, {{ drug_regex }})) %&gt;% 
+  ggplot(aes(x = year, y = patients_per_1000_inhabitants, group = age_cat, color = value)) +
+  geom_line() +
+  facet_grid(rows = vars(drug, ATC), scales = "free", drop = F) +
+  theme_light(base_size = 14) +
+  scale_x_continuous(breaks = c(seq(2006, 2019, 2))) +
+  scale_color_identity() +
+  theme(plot.caption = element_text(hjust = 0),
+        legend.position = "none",
+        panel.spacing = unit(0.8, "cm")) +
+  labs(y = "Female patients\nper 1,000 women in the population", title = paste0(title, " utilization in Swedish women"), subtitle = "aged between 15 and 84 years") +
+    ggrepel::geom_label_repel(aes(label = label), na.rm = TRUE, nudge_x = 3, hjust = 0.5, direction = "y", segment.size = 0.1, segment.colour = "black", show.legend = F)
+}
+```
+---
+# Set argument lists for the plotting functon and iterate
+
+```r
+# no tolfenamic
+list_regex_se &lt;- list(regex_triptans, regex_ergots, regex_nsaid, regex_naproxen, regex_erenumab, regex_paracet, regex_salyc_acid_caff, regex_metoclopramide, regex_domperidone, regex_metoprolol, regex_propanolol, regex_topiramate, regex_valproate, regex_flunarizine, regex_amitriptyline, regex_gabapentin, regex_pizotifen, regex_lisinopril, regex_candesartan, regex_botulinum)
+
+list_title_se &lt;- list("triptans", "ergots", "NSAIDs", "naproxen", "erenumab", "paracetamol", "salycilic acid and caffeine", "metoclopramide", "domperidone", "metoprolol", "propanolol", "topiramate", "valproate", "flunarizine", "amitriptyline", "gabapentin", "pizotifen", "lisinopril", "candesartan", "botulinum") %&gt;% 
+  map_if(. != "NSAIDs", ~ str_to_sentence(.))
+
+list_plots_se &lt;- pmap(list(list_regex_se, list_title_se), ~plot_utilization_se(data = data_se, drug_regex = ..1, title = ..2, max_year = 2019)) %&gt;% 
+  setNames(., c("triptans", "ergots", "NSAIDs", "naproxen", "erenumab", "paracetamol", "salycilic acid and caffeine", "metoclopramide", "domperidone", "metoprolol", "propanolol", "topiramate", "valproate", "flunarizine", "amitriptyline", "gabapentin", "pizotifen", "lisinopril", "candesartan", "botulinum"))
+```
+---
+# Swedish results
+
+```r
+results_se &lt;- data_se %&gt;% 
+  filter((age_cat == "25-34" | age_cat == "35-44"), year == "2019", !is.na(patients_per_1000_inhabitants)) %&gt;% 
+  select(ATC, drug, age_cat, patients_per_1000_inhabitants, country)
+```
+---
+# Combine Danish and Swedish results
+
+```r
+results_se %&gt;%
+  full_join(results_dk) %&gt;% 
+  arrange(ATC, age_cat) %&gt;% 
+  pivot_wider(names_from = country, values_from = patients_per_1000_inhabitants) %&gt;% 
+  slice(1:10) %&gt;% 
+  kableExtra::kable(format = "html")
+```
+
+```
+## Joining, by = c("ATC", "drug", "age_cat", "patients_per_1000_inhabitants", "country")
+```
+
+&lt;table&gt;
+ &lt;thead&gt;
+  &lt;tr&gt;
+   &lt;th style="text-align:left;"&gt; ATC &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; drug &lt;/th&gt;
+   &lt;th style="text-align:left;"&gt; age_cat &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; Sweden &lt;/th&gt;
+   &lt;th style="text-align:right;"&gt; Denmark &lt;/th&gt;
+  &lt;/tr&gt;
+ &lt;/thead&gt;
+&lt;tbody&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 9.1902997 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 9.9674074 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA01 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoclopramide &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 35-44 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 8.4018666 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 7.4055908 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.0416631 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 1.6406237 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; A03FA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Domperidone &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 35-44 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.0689072 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 1.7480274 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; C07AA05 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Propranolol &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 8.1171163 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 4.4959136 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; C07AA05 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Propranolol &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 35-44 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 10.0428186 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 5.2355274 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; C07AB02 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoprolol &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 6.2710111 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 3.7127012 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; C07AB02 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Metoprolol &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 35-44 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 12.2911151 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 9.8322977 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; C09AA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Lisinopril &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 25-34 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.0086199 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.2967962 &lt;/td&gt;
+  &lt;/tr&gt;
+  &lt;tr&gt;
+   &lt;td style="text-align:left;"&gt; C09AA03 &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; Lisinopril &lt;/td&gt;
+   &lt;td style="text-align:left;"&gt; 35-44 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.0512798 &lt;/td&gt;
+   &lt;td style="text-align:right;"&gt; 0.8212592 &lt;/td&gt;
+  &lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+---
+# Combine Danish and Swedish plots
+
+```r
+cowplot::plot_grid(list_plots_dk$triptans, list_plots_se$triptans)
+```
+
+&lt;img src="2020-10-10-nordic-data_files/figure-html/unnamed-chunk-44-1.png" width="1008" /&gt;
+
+
+
+
+
+    </textarea>
+<style data-target="print-only">@media screen {.remark-slide-container{display:block;}.remark-slide-scaler{box-shadow:none;}}</style>
+<script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
+<script src="macros.js"></script>
+<script>var slideshow = remark.create({
+"ratio": "16:9",
+"highlightStyle": "github",
+"highlightLines": true,
+"countIncrementalSlides": false
+});
+if (window.HTMLWidgets) slideshow.on('afterShowSlide', function (slide) {
+  window.dispatchEvent(new Event('resize'));
+});
+(function(d) {
+  var s = d.createElement("style"), r = d.querySelector(".remark-slide-scaler");
+  if (!r) return;
+  s.type = "text/css"; s.innerHTML = "@page {size: " + r.style.width + " " + r.style.height +"; }";
+  d.head.appendChild(s);
+})(document);
+
+(function(d) {
+  var el = d.getElementsByClassName("remark-slides-area");
+  if (!el) return;
+  var slide, slides = slideshow.getSlides(), els = el[0].children;
+  for (var i = 1; i < slides.length; i++) {
+    slide = slides[i];
+    if (slide.properties.continued === "true" || slide.properties.count === "false") {
+      els[i - 1].className += ' has-continuation';
+    }
+  }
+  var s = d.createElement("style");
+  s.type = "text/css"; s.innerHTML = "@media print { .has-continuation { display: none; } }";
+  d.head.appendChild(s);
+})(document);
+// delete the temporary CSS (for displaying all slides initially) when the user
+// starts to view slides
+(function() {
+  var deleted = false;
+  slideshow.on('beforeShowSlide', function(slide) {
+    if (deleted) return;
+    var sheets = document.styleSheets, node;
+    for (var i = 0; i < sheets.length; i++) {
+      node = sheets[i].ownerNode;
+      if (node.dataset["target"] !== "print-only") continue;
+      node.parentNode.removeChild(node);
+    }
+    deleted = true;
+  });
+})();
+(function() {
+  "use strict"
+  // Replace <script> tags in slides area to make them executable
+  var scripts = document.querySelectorAll(
+    '.remark-slides-area .remark-slide-container script'
+  );
+  if (!scripts.length) return;
+  for (var i = 0; i < scripts.length; i++) {
+    var s = document.createElement('script');
+    var code = document.createTextNode(scripts[i].textContent);
+    s.appendChild(code);
+    var scriptAttrs = scripts[i].attributes;
+    for (var j = 0; j < scriptAttrs.length; j++) {
+      s.setAttribute(scriptAttrs[j].name, scriptAttrs[j].value);
+    }
+    scripts[i].parentElement.replaceChild(s, scripts[i]);
+  }
+})();
+(function() {
+  var links = document.getElementsByTagName('a');
+  for (var i = 0; i < links.length; i++) {
+    if (/^(https?:)?\/\//.test(links[i].getAttribute('href'))) {
+      links[i].target = '_blank';
+    }
+  }
+})();
+// adds .remark-code-has-line-highlighted class to <pre> parent elements
+// of code chunks containing highlighted lines with class .remark-code-line-highlighted
+(function(d) {
+  const hlines = d.querySelectorAll('.remark-code-line-highlighted');
+  const preParents = [];
+  const findPreParent = function(line, p = 0) {
+    if (p > 1) return null; // traverse up no further than grandparent
+    const el = line.parentElement;
+    return el.tagName === "PRE" ? el : findPreParent(el, ++p);
+  };
+
+  for (let line of hlines) {
+    let pre = findPreParent(line);
+    if (pre && !preParents.includes(pre)) preParents.push(pre);
+  }
+  preParents.forEach(p => p.classList.add("remark-code-has-line-highlighted"));
+})(document);</script>
+<style>
+.logo {
+  background-image: url(logo.png);
+  background-size: contain;
+  background-repeat: no-repeat;
+  position: absolute;
+  top: 1em;
+  right: 1em;
+  width: 110px;
+  height: 128px;
+  z-index: 0;
+}
+</style>
+
+<script>
+document
+  .querySelectorAll(
+    '.remark-slide-content' +
+    // add additional classes to exclude here, e.g.
+    // ':not(.inverse)' +
+    ':not(.hide-logo)'
+  )
+  .forEach(el => {
+    el.innerHTML += '<div class="logo"></div>';
+  });
+</script>
+
+<script>
+slideshow._releaseMath = function(el) {
+  var i, text, code, codes = el.getElementsByTagName('code');
+  for (i = 0; i < codes.length;) {
+    code = codes[i];
+    if (code.parentNode.tagName !== 'PRE' && code.childElementCount === 0) {
+      text = code.textContent;
+      if (/^\\\((.|\s)+\\\)$/.test(text) || /^\\\[(.|\s)+\\\]$/.test(text) ||
+          /^\$\$(.|\s)+\$\$$/.test(text) ||
+          /^\\begin\{([^}]+)\}(.|\s)+\\end\{[^}]+\}$/.test(text)) {
+        code.outerHTML = code.innerHTML;  // remove <code></code>
+        continue;
+      }
+    }
+    i++;
+  }
+};
+slideshow._releaseMath(document);
+</script>
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+(function () {
+  var script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src  = 'https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-MML-AM_CHTML';
+  if (location.protocol !== 'file:' && /^https?:/.test(script.src))
+    script.src  = script.src.replace(/^https?:/, '');
+  document.getElementsByTagName('head')[0].appendChild(script);
+})();
+</script>
+  </body>
+</html>

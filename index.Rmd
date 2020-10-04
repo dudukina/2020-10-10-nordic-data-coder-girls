@@ -1,0 +1,646 @@
+---
+title: "R and tidyverse for publicly available Nordic data on medication utilization"
+author: 
+  - "Elena Dudukina"
+date: '`r Sys.Date()`'
+output:
+  xaringan::moon_reader:
+    includes:
+      after_body: insert-logo.html
+    lib_dir: libs
+    css: xaringan-themer.css
+    nature:
+      beforeInit: "macros.js"
+      ratio: "16:9"
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+---
+
+```{r setup, include=FALSE}
+options(htmltools.dir.version = FALSE)
+knitr::opts_chunk$set(fig.retina = 3, fig.width = 8)
+library(magrittr)
+```
+
+```{r include=FALSE}
+colors <- c("#FFFDC2", "#2F1612", "#F0A91D", "#E78F35", "#4B2620", "#EA7F15", "#EA5115", "#7F4213", "#BB6B16", "#D07821", "#FFD64A", "#F9B054", "#A63410", "#962A06", "#C88335")
+scales::show_col(colors)
+```
+
+```{r eval=FALSE, include=FALSE}
+# logo
+data <- tribble(
+  ~x, ~point, ~lower, ~higher,
+  #--|--|----
+  1, 1, 0.5, 1.5,
+  2, 1.2, 0.5, 1.8,
+  3, 0.8, 0.7, 0.9,
+  4, 1.0, 0.4, 1.6,
+  5, 0.5, 0.0, 1,
+  6, 0.8, 0.5, 1.1
+)
+
+logo <- data  %>% 
+  mutate(
+    color_point_1 = case_when(
+      x %in% c(1, 3, 5) ~ "#962A06",
+      T ~ "#EA7F15"
+    ),
+    color_1_bar = case_when(
+      x %in% c(1, 3, 5) ~ "#EA7F15",
+      T ~ "#962A06"
+    )
+  ) %>% 
+  ggplot(aes(y = point, x = x)) +
+  geom_segment(size = 5, aes(x = x, y = lower, xend = x, yend = higher, color = color_1_bar, fill = color_1_bar), lineend = "round", linejoin = "round", width = 0) +
+  geom_point(size = 6, aes(color = color_point_1, fill = color_point_1)) +
+  coord_flip() +
+  scale_color_identity() +
+  scale_fill_identity() +
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+        text = element_blank(),
+        rect = element_rect(fill = "transparent"),
+        plot.background = element_rect(fill = "transparent", colour = NA)
+  )
+
+# ggsave(logo, filename = "logo.png", path = "/Users/elenadudukina/Documents/Git/2020-10-10-nordic-data-coder-girls/", width = 3, height = 2.5, units = "in", dpi = 1200)
+```
+
+```{r xaringan-themer, echo=FALSE, message=FALSE, warning=FALSE}
+library(xaringanthemer)
+style_duo_accent(
+  title_slide_background_color = "#FFFFFF",
+  primary_color = "#962A06",
+  secondary_color = "#EA7F15",
+  white_color = "#FFFFFF",
+  black_color = "#2F1612",
+  background_color = "#FFFFFF",
+  title_slide_text_color = choose_dark_or_light("#962A06", "#2F1612", "#EA7F15"),
+  header_font_google = google_font("Josefin Sans"),
+  text_font_google   = google_font("Montserrat", "300", "300i"),
+  code_font_google   = google_font("Fira Mono"),
+  header_h1_font_size = "2.0rem",
+  header_h2_font_size = "1.5em",
+  header_h3_font_size = "1.0em",
+  text_slide_number_font_size = "0.6em",
+  footnote_font_size = "0.5em",
+  footnote_position_bottom = "80px"
+)
+```
+# National Registries
+- Denmark and other Nordic countries have built a system based on societal trust and enabled state-covered universal healthcare
+- Large administrative registries with data on hospital visits and prescription drug utilization
+- Amazing possibilities for a high quality registry-based research
+- Many registries can be accessible to a public via aggregated datasets
+      - The National Prescription Registry (since 1995)
+      - Drug utilization trends and between countries comparisons
+---
+# Loading libraries and finding autumn palette
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(magrittr)
+library(colorfindr)
+library(ggrepel)
+
+autumn_colors <- get_colors("https://images2.minutemediacdn.com/image/upload/c_crop,h_1349,w_2400,x_0,y_125/f_auto,q_auto,w_1100/v1569260079/shape/mentalfloss/gettyimages-1053614486_1.jpg") %>% 
+  make_palette(n = 15)
+```
+---
+Prepare to load data on ![:scale 3%](pill.png)
+```{r}
+link_list_dk <- list(
+  "1996_atc_code_data.txt" = "https://medstat.dk/da/download/file/MTk5Nl9hdGNfY29kZV9kYXRhLnR4dA==",
+  "1997_atc_code_data.txt"  = "https://medstat.dk/da/download/file/MTk5N19hdGNfY29kZV9kYXRhLnR4dA==",
+  "1998_atc_code_data.txt" = "https://medstat.dk/da/download/file/MTk5OF9hdGNfY29kZV9kYXRhLnR4dA==",
+  "atc_code_text.txt" = "https://medstat.dk/da/download/file/YXRjX2NvZGVfdGV4dC50eHQ=",
+  "atc_groups.txt" = "https://medstat.dk/da/download/file/YXRjX2dyb3Vwcy50eHQ=",
+  "population_data.txt" = "https://medstat.dk/da/download/file/cG9wdWxhdGlvbl9kYXRhLnR4dA=="
+)
+```
+
+## The actual number of files is 23, from 1996 until 2019 and 3 additional files with meta-data, e.g., variables' labels
+
+```{r include=FALSE}
+link_list_dk <- list(
+  "1996_atc_code_data.txt" = "https://medstat.dk/da/download/file/MTk5Nl9hdGNfY29kZV9kYXRhLnR4dA==",
+  "1997_atc_code_data.txt"  = "https://medstat.dk/da/download/file/MTk5N19hdGNfY29kZV9kYXRhLnR4dA==",
+  "1998_atc_code_data.txt" = "https://medstat.dk/da/download/file/MTk5OF9hdGNfY29kZV9kYXRhLnR4dA==",
+  "1999_atc_code_data.txt" = "https://medstat.dk/da/download/file/MTk5OV9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2000_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAwMF9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2001_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAwMV9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2002_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAwMl9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2003_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAwM19hdGNfY29kZV9kYXRhLnR4dA==",
+  "2004_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAwNF9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2006_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAwNl9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2007_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAwN19hdGNfY29kZV9kYXRhLnR4dA==",
+  "2008_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAwOF9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2009_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAwOV9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2010_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxMF9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2011_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxMV9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2012_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxMl9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2013_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxM19hdGNfY29kZV9kYXRhLnR4dA==",
+  "2014_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxNF9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2015_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxNV9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2016_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxNl9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2017_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxN19hdGNfY29kZV9kYXRhLnR4dA==",
+  "20_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxOF9hdGNfY29kZV9kYXRhLnR4dA==",
+  "2019_atc_code_data.txt" = "https://medstat.dk/da/download/file/MjAxOV9hdGNfY29kZV9kYXRhLnR4dA==",
+  "atc_code_text.txt" = "https://medstat.dk/da/download/file/YXRjX2NvZGVfdGV4dC50eHQ=",
+  "atc_groups.txt" = "https://medstat.dk/da/download/file/YXRjX2dyb3Vwcy50eHQ=",
+  "population_data.txt" = "https://medstat.dk/da/download/file/cG9wdWxhdGlvbl9kYXRhLnR4dA=="
+)
+
+# ATC codes are stored in files
+seq_atc <- c(1:23)
+atc_code_data_list <- link_list_dk[seq_atc]
+```
+---
+# Data on population sizes of each age group and sex
+```{r}
+# age structure data
+# parse with column type character
+age_structure <- read_delim(link_list_dk[["population_data.txt"]], delim = ";", col_names = c(paste0("V", c(1:7))), col_types = cols(V1 = col_character(), V2 = col_character(), V3 = col_character(), V4 = col_character(), V5 = col_character(), V6 = col_character(), V7 = col_character())) %>%
+  # rename and keep columns
+  select(year = V1,
+         region_text = V2,
+         region = V3,
+         gender = V4,
+         age = V5,
+         denominator_per_year = V6) %>% 
+  # human-reading friendly label on sex categories
+  mutate(
+      gender_text = case_when(
+      gender == "0" ~ "both sexes",
+      gender == "1" ~ "men",
+      gender == "2" ~ "women",
+      T ~ as.character(gender)
+    )
+  ) %>% 
+  # make numeric variables
+  mutate_at(vars(year, age, denominator_per_year), as.numeric) %>% 
+  # keep only data for the age categories I will work with, only on women, and for the whole Denmark
+  filter(age %in% 15:84, gender == "2", region == "0") %>% 
+  arrange(year, age, region, gender)
+```
+---
+# Data structure
+```{r}
+age_structure %>% slice(1:10)
+```
+---
+# Prepare labels for the drugs in English
+```{r}
+eng_drug <- read_delim(link_list_dk[["atc_groups.txt"]], delim = ";", col_names = c(paste0("V", c(1:6))), col_types = cols(V1 = col_character(), V2 = col_character(), V3 = col_character(), V4 = col_character(), V5 = col_character(), V6 = col_character())) %>% 
+  # keep drug classes labels in English
+  filter(V5 == "1") %>% 
+  select(ATC = V1,
+         drug = V2,
+         unit_dk = V4)
+```
+---
+# Check drugs' labels
+
+```{r}
+eng_drug %>% slice(1:10)
+```
+---
+# Drugs of interest
+Medications used in Denmark for either migraine episode relief or migraine prophylaxis:
+
+I use regular expresions (regex) to capture the drugs codes of interest
+`$` at the end of the regular expression tells to my search strategy what is the last character of the string
+
+**Example:**
+```{r}
+codes <- c("N02CC", "N02C", "N02CC01", "N02CC01", "N02CC02", "N02CC")
+only_want_N02C_regex <- "N02C$"
+only_want_N02CC_regex <- "N02CC$"
+want_any_N02C_regex <- "N02CC"
+
+str_extract(string = codes, pattern = only_want_N02C_regex)
+str_extract(string = codes, pattern = only_want_N02CC_regex)
+str_extract(string = codes, pattern = want_any_N02C_regex)
+```
+
+---
+# Specify all the drug codes I need
+
+```{r}
+regex_triptans <- "N02CC$"
+regex_ergots <- "N02CA$"
+regex_nsaid <- "M01A$"
+regex_naproxen <- "M01AE02$"
+regex_erenumab <- "N02CX07$|N02CD01$"
+regex_galcanezumab <- "N02CX08$|N02CD02$"
+regex_fremanezumab <- "N02CD03$"
+regex_paracet <- "N02BE01$"
+regex_salyc_acid_caff <- "N02BA51$"
+regex_metoclopramide <- "A03FA01$"
+regex_domperidone <- "A03FA03$"
+regex_metoprolol <- "C07AB02$"
+regex_propanolol <- "C07AA05$"
+regex_tolfenamic <- "M01AG02$"
+regex_topiramate <- "N03AX11$"
+regex_valproate <- "N03AG01$"
+regex_flunarizine <- "N07CA03$"
+regex_amitriptyline <- "N06AA09$"
+regex_gabapentin <- "N03AX12$"
+regex_pizotifen <- "N02CX01$"
+regex_lisinopril <- "C09AA03$"
+regex_candesartan <- "C09CA06$"
+regex_riboflavin <- "A11HA04$"
+regex_botulinum <- "M03AX01$"
+```
+
+```{r include=FALSE}
+all_migraine_drugs <- paste(regex_triptans, regex_ergots, regex_nsaid, regex_naproxen, regex_erenumab, regex_galcanezumab, regex_fremanezumab, regex_paracet, regex_salyc_acid_caff, regex_metoclopramide, regex_domperidone, regex_metoprolol, regex_propanolol, regex_tolfenamic, regex_topiramate, regex_valproate, regex_flunarizine, regex_amitriptyline, regex_gabapentin, regex_pizotifen, regex_lisinopril, regex_candesartan, regex_riboflavin, regex_botulinum, sep = "|")
+```
+---
+# Load main data
+```{r}
+# ATC data
+atc_data <- map(atc_code_data_list, ~read_delim(file = .x, delim = ";", trim_ws = T, col_names = c(paste0("V", c(1:14))), col_types = cols(V1 = col_character(), V2 = col_character(), V3 = col_character(), V4 = col_character(), V5 = col_character(),V6 = col_character(), V7 = col_character(), V8 = col_character(), V9 = col_character(), V10 = col_character(), V11 = col_character(), V12 = col_character(), V13 = col_character(), V14 = col_character()))) %>% 
+  # bind data from all years
+  bind_rows()
+```
+---
+# Typical data structure
+## of a medication utilization file from the source
+
+```{r}
+atc_data %>% slice(1:10)
+```
+---
+# Human-friendly column names
+## optional, but, hey, easier to follow
+```{r}
+atc_data %<>% 
+  # rename and keep columns
+  rename(
+    ATC = V1,
+    year = V2,
+    sector = V3,
+    region = V4,
+    gender = V5,
+    age = V6,
+    number_of_people = V7,
+    patients_per_1000_inhabitants = V8,
+    turnover = V9,
+    regional_grant_paid = V10,
+    quantity_sold_1000_units = V11,
+    quantity_sold_units_per_unit_1000_inhabitants_per_day = V12,
+    percentage_of_sales_in_the_primary_sector = V13
+  )
+```
+---
+# Sneak peek
+```{r}
+atc_data %>% slice(1:10)
+```
+---
+# Wrangle data 
+```{r}
+atc_data %<>% 
+  # clean columns names and set-up labels
+  mutate(
+    year = as.numeric(year),
+    region_text = case_when(
+      region == "0" ~ "DK",
+      region == "1" ~ "Region Hovedstaden",
+      region == "2" ~ "Region Midtjylland",
+      region == "3" ~ "Region Nordjylland",
+      region == "4" ~ "Region Sjælland",
+      region == "5" ~ "Region Syddanmark",
+      T ~ NA_character_
+    ),
+    gender_text = case_when(
+      gender == "0" ~ "both sexes",
+      gender == "1" ~ "men",
+      gender == "2" ~ "women",
+      T ~ as.character(gender)
+    )
+  ) %>% 
+  # reformat all variables, which should be numeric as numeric (not character)
+  mutate_at(vars(turnover, regional_grant_paid, quantity_sold_1000_units, quantity_sold_units_per_unit_1000_inhabitants_per_day, number_of_people, patients_per_1000_inhabitants), as.numeric)
+```
+---
+# Sneak peek
+```{r}
+atc_data %>% slice(1:10)
+```
+---
+# Keep only the needed data
+```{r warning=FALSE}
+atc_data %<>% 
+  select(-V14) %>%
+  filter(
+  # only women
+  gender == "2",
+  # country level data
+  region == "0",
+  # prescription medicine only
+  sector =="0"
+) %>% 
+  # only drugs of interest
+  filter(str_detect(ATC, all_migraine_drugs)) %>% 
+  # deal with non-numeric age and re-code as numeric
+  mutate(
+    age = parse_integer(age)
+  )
+```
+---
+# Keep only the needed data
+
+```{r}
+atc_data %<>% 
+  # ages 15 to 80 years
+  filter(age %in% 15:84) %>% 
+  # make categories
+  mutate(
+    age_cat = case_when(
+      age %in% 15:24 ~ "15-24",
+      age %in% 25:34 ~ "25-34",
+      age %in% 35:44 ~ "35-44",
+      age %in% 45:54 ~ "45-54",
+      age %in% 55:64 ~ "55-64",
+      age %in% 65:74 ~ "65-74",
+      age %in% 75:84 ~ "75-84",
+      T ~ NA_character_
+    )
+)
+```
+---
+# Sneak peek
+
+```{r}
+atc_data %>% slice(1:10)
+```
+---
+# Add meta-data
+
+
+```{r}
+atc_data %<>% 
+  # get age groups labels and other meta-data
+  left_join(age_structure) %>% 
+  # get drugs' labels
+  left_join(eng_drug)
+```
+---
+# Sneak peek
+```{r}
+atc_data %>% select(15:19) %>% slice(1:10)
+```
+---
+# Compute numerators and denomibators
+## for the age groups of interest
+
+```{r}
+atc_data %<>% 
+  group_by(ATC, year, age_cat) %>% 
+  mutate(
+    numerator = sum(number_of_people),
+    denominator = sum(denominator_per_year),
+    patients_per_1000_inhabitants = numerator / denominator * 1000
+  ) %>% 
+  filter(row_number() == 1) %>% 
+  ungroup() %>% 
+  select(year, ATC, drug, unit_dk, gender, age_cat, patients_per_1000_inhabitants) %>% 
+  mutate(
+    country = "Denmark"
+  )
+```
+---
+# Sneak peek
+
+```{r}
+atc_data %>% 
+  slice(1:10) %>% 
+  kableExtra::kable(format = "html")
+```
+---
+# Check if all medication's utilization was available
+
+```{r}
+atc_data %>% distinct(ATC, drug) %>% 
+  filter(is.na(drug))
+
+# fix missing label for N02CD01
+atc_data %<>% mutate(
+  drug = case_when(
+    ATC == "N02CD01" ~ "erenumab",
+    T ~ drug
+  )
+)
+```
+---
+# Check
+
+```{r}
+atc_data %>% 
+  select(ATC, drug) %>% 
+  slice(1:10) %>% 
+  kableExtra::kable(format = "html")
+```
+---
+# Make a plotting function for all drugs odf interest
+
+```{r}
+plot_utilization <- function(data, drug_regex, title, max_year){
+  data %>% 
+  mutate(label = if_else(year == max_year, as.character(age_cat), NA_character_),
+         value = case_when(
+             age_cat == "25-34" ~ "#EA7F15",
+             age_cat == "35-44" ~ "#962A06",
+             T ~ "gray"
+         )) %>%
+  filter(str_detect(ATC, {{ drug_regex }})) %>% 
+  ggplot(aes(x = year, y = patients_per_1000_inhabitants, group = age_cat, color = value)) +
+  geom_line() +
+  facet_grid(rows = vars(drug, ATC), scales = "free", drop = F) +
+  theme_light(base_size = 14) +
+  scale_x_continuous(breaks = c(seq(1995, 2019, 2))) +
+  scale_color_identity() +
+  theme(plot.caption = element_text(hjust = 0),
+        legend.position = "none",
+        panel.spacing = unit(0.8, "cm")) +
+  labs(y = "Female patients\nper 1,000 women in the population", title = paste0(title, " utilization in Danish women"), subtitle = "aged between 15 and 84 years") +
+    ggrepel::geom_label_repel(aes(label = label), na.rm = TRUE, nudge_x = 3, hjust = 0.5, direction = "y", segment.size = 0.1, segment.colour = "black", show.legend = F)
+}
+```
+---
+# Specify plotting arguments
+
+```{r}
+list_regex_dk <- list(regex_triptans, regex_ergots, regex_nsaid, regex_naproxen, regex_erenumab, regex_paracet, regex_salyc_acid_caff, regex_metoclopramide, regex_domperidone, regex_metoprolol, regex_propanolol, regex_tolfenamic, regex_topiramate, regex_valproate, regex_flunarizine, regex_amitriptyline, regex_gabapentin, regex_pizotifen, regex_lisinopril, regex_candesartan, regex_botulinum)
+
+list_title_dk <- list("triptans", "ergots", "NSAIDs", "naproxen", "erenumab", "paracetamol", "salycilic acid and caffeine", "metoclopramide", "domperidone", "metoprolol", "propanolol", "tolfenamic", "topiramate", "valproate", "flunarizine", "amitriptyline", "gabapentin", "pizotifen", "lisinopril", "candesartan", "botulinum") %>% 
+  map_if(. != "NSAIDs", ~ str_to_sentence(.))
+```
+---
+# Iterate along the argumets' lists
+
+```{r}
+list_plots_dk <- pmap(list(list_regex_dk, list_title_dk), ~plot_utilization(data = atc_data, drug_regex = ..1, title = ..2, max_year = 2019)) %>% 
+  setNames(., c("triptans", "ergots", "NSAIDs", "naproxen", "erenumab", "paracetamol", "salycilic acid and caffeine", "metoclopramide", "domperidone", "metoprolol", "propanolol", "tolfenamic", "topiramate", "valproate", "flunarizine", "amitriptyline", "gabapentin", "pizotifen", "lisinopril", "candesartan", "botulinum"))
+```
+---
+```{r}
+results_dk <- atc_data %>% 
+  filter((age_cat == "25-34" | age_cat == "35-44"), year == "2019") %>% 
+  select(ATC, drug, age_cat, patients_per_1000_inhabitants, country)
+
+results_dk %>% 
+  slice(1:5) %>% 
+  kableExtra::kable(format = "html")
+```
+---
+# Plots sneak peek
+```{r}
+list_plots_dk$triptans
+```
+---
+# Swedish data
+I have Swedish data locally saved, the source can be found [here](https://sdb.socialstyrelsen.se/export/csv/statistikdatabasen-lakemedel.zip)
+
+## Keep only the drugs used in migraine, population of women between 18 and 84 on the national level
+```{r include=FALSE}
+data_se <- read_rds("/Users/elenadudukina/Documents/Git/statistikdatabasen-lakemedel/all_data_se_riket.rds")
+```
+
+```{r}
+data_se %<>% 
+  filter(gender == "Kvinnor", region == "Riket") %>% 
+  filter(str_detect(string = ATC, pattern = all_migraine_drugs))
+```
+---
+# Swedish data is grouped by age categories
+```{r}
+data_se %>% 
+  distinct(age_group)
+```
+---
+# Categorize age groups according to Danish data
+```{r}
+data_se %<>% filter(! age_group %in% c("0-4", "5-9", "10-14", "85+", "Totalt")) %>% 
+  # re-group ages as is Danish data
+  mutate(
+    age_cat = case_when(
+      age_group == "15-19" | age_group == "20-24" ~ "15-24",
+      age_group == "25-29" | age_group == "30-34" ~ "25-34",
+      age_group == "35-39" | age_group == "40-44" ~ "35-44",
+      age_group == "45-49" | age_group == "50-54" ~ "45-54",
+      age_group == "55-59" | age_group == "60-64" ~ "55-64",
+      age_group == "65-69" | age_group == "70-74" ~ "65-74",
+      age_group == "75-79" | age_group == "80-84" ~ "75-84",
+      T ~ "other"
+    )
+  )
+```
+---
+# Compute denominatirs for medication utilization rate
+
+```{r}
+data_se %<>% group_by(ATC, year, age_cat) %>% 
+  mutate(
+    numerator = sum(`Antal patienter`),
+    denominator = sum(Befolkning),
+    patients_per_1000_inhabitants = numerator / denominator * 1000
+  ) %>% 
+  filter(row_number() == 1) %>% 
+  ungroup() %>% 
+  select(year, ATC, gender, age_cat, patients_per_1000_inhabitants) %>% 
+  mutate(
+    country = "Sweden"
+  )
+```
+---
+# Add English labels to the ATC codes in Swedish data
+```{r}
+data_se %<>% 
+  left_join(eng_drug)
+```
+---
+# Check if all medication utilization was available
+```{r}
+data_se %>% 
+  distinct(ATC, drug) %>% 
+  filter(is.na(drug))
+
+# fix missing label for N02CD01
+data_se %<>% mutate(
+  drug = case_when(
+    ATC == "N02CD01" ~ "Erenumab",
+    ATC == "N02CD03" ~ "Galcanezumab",
+    ATC == "N02CX07" ~ "Erenumab",
+    T ~ drug
+  )
+)
+```
+---
+# Make a plotting function for Swedish data
+```{r}
+plot_utilization_se <- function(data, drug_regex, title, max_year){
+  data %>% 
+  filter(! is.na(patients_per_1000_inhabitants)) %>% 
+  mutate(label = if_else(year == max_year, as.character(age_cat), NA_character_),
+         value = case_when(
+             age_cat == "25-34" ~ "#EA7F15",
+             age_cat == "35-44" ~ "#962A06",
+             T ~ "gray"
+         )) %>%
+  filter(str_detect(ATC, {{ drug_regex }})) %>% 
+  ggplot(aes(x = year, y = patients_per_1000_inhabitants, group = age_cat, color = value)) +
+  geom_line() +
+  facet_grid(rows = vars(drug, ATC), scales = "free", drop = F) +
+  theme_light(base_size = 14) +
+  scale_x_continuous(breaks = c(seq(2006, 2019, 2))) +
+  scale_color_identity() +
+  theme(plot.caption = element_text(hjust = 0),
+        legend.position = "none",
+        panel.spacing = unit(0.8, "cm")) +
+  labs(y = "Female patients\nper 1,000 women in the population", title = paste0(title, " utilization in Swedish women"), subtitle = "aged between 15 and 84 years") +
+    ggrepel::geom_label_repel(aes(label = label), na.rm = TRUE, nudge_x = 3, hjust = 0.5, direction = "y", segment.size = 0.1, segment.colour = "black", show.legend = F)
+}
+```
+---
+# Set argument lists for the plotting functon and iterate
+```{r}
+# no tolfenamic
+list_regex_se <- list(regex_triptans, regex_ergots, regex_nsaid, regex_naproxen, regex_erenumab, regex_paracet, regex_salyc_acid_caff, regex_metoclopramide, regex_domperidone, regex_metoprolol, regex_propanolol, regex_topiramate, regex_valproate, regex_flunarizine, regex_amitriptyline, regex_gabapentin, regex_pizotifen, regex_lisinopril, regex_candesartan, regex_botulinum)
+
+list_title_se <- list("triptans", "ergots", "NSAIDs", "naproxen", "erenumab", "paracetamol", "salycilic acid and caffeine", "metoclopramide", "domperidone", "metoprolol", "propanolol", "topiramate", "valproate", "flunarizine", "amitriptyline", "gabapentin", "pizotifen", "lisinopril", "candesartan", "botulinum") %>% 
+  map_if(. != "NSAIDs", ~ str_to_sentence(.))
+
+list_plots_se <- pmap(list(list_regex_se, list_title_se), ~plot_utilization_se(data = data_se, drug_regex = ..1, title = ..2, max_year = 2019)) %>% 
+  setNames(., c("triptans", "ergots", "NSAIDs", "naproxen", "erenumab", "paracetamol", "salycilic acid and caffeine", "metoclopramide", "domperidone", "metoprolol", "propanolol", "topiramate", "valproate", "flunarizine", "amitriptyline", "gabapentin", "pizotifen", "lisinopril", "candesartan", "botulinum"))
+```
+---
+# Swedish results
+```{r}
+results_se <- data_se %>% 
+  filter((age_cat == "25-34" | age_cat == "35-44"), year == "2019", !is.na(patients_per_1000_inhabitants)) %>% 
+  select(ATC, drug, age_cat, patients_per_1000_inhabitants, country)
+```
+---
+# Combine Danish and Swedish results
+```{r}
+results_se %>%
+  full_join(results_dk) %>% 
+  arrange(ATC, age_cat) %>% 
+  pivot_wider(names_from = country, values_from = patients_per_1000_inhabitants) %>% 
+  slice(1:10) %>% 
+  kableExtra::kable(format = "html")
+```
+---
+# Combine Danish and Swedish plots
+```{r, fig.width=14}
+cowplot::plot_grid(list_plots_dk$triptans, list_plots_se$triptans)
+```
+
+
+
+
+
