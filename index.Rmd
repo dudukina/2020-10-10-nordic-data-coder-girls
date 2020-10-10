@@ -23,6 +23,20 @@ knitr::opts_chunk$set(fig.retina = 3, fig.width = 8)
 library(magrittr)
 ```
 
+```{r broadcast, echo=FALSE}
+xaringanExtra::use_broadcast()
+```
+
+```{r share-again, echo=FALSE}
+xaringanExtra::use_share_again()
+```
+
+```{r style-share-again, echo=FALSE}
+xaringanExtra::style_share_again(
+  share_buttons = c("twitter")
+)
+```
+
 ```{r include=FALSE}
 colors <- c("#FFFDC2", "#2F1612", "#F0A91D", "#E78F35", "#4B2620", "#EA7F15", "#EA5115", "#7F4213", "#BB6B16", "#D07821", "#FFD64A", "#F9B054", "#A63410", "#962A06", "#C88335")
 scales::show_col(colors)
