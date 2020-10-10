@@ -654,6 +654,8 @@ results_se %>%
 cowplot::plot_grid(list_plots_dk$triptans, list_plots_se$triptans)
 ```
 
+---
+# Visit a full [blog post](https://www.elenadudukina.com/post/migraine-medication-use-in-denmark-among-women/2020-10-03-migraine-medication-use-in-denmark-among-women/)
 
 
 
